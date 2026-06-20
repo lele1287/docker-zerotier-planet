@@ -68,6 +68,7 @@ start_container() {
         echo "容器创建完成"
     fi
 }
+
 # 检查内核版本
 kernel_check() {
     os_name=$(grep ^ID= /etc/os-release | cut -d'=' -f2 | tr -d '"')
@@ -156,6 +157,20 @@ configure_ip() {
     echo "获取到的IPv6地址为: $ipv6"
 }
 
+# 创建必要的目录
+create_directories() {
+    echo "正在创建必要的目录..."
+    mkdir -p ${DIST_PATH}
+    mkdir -p ${CONFIG_PATH}
+    mkdir -p ${ZTNCUI_PATH}
+    mkdir -p ${ZEROTIER_PATH}/one
+    
+    if [ $? -ne 0 ]; then
+        print_message "创建目录失败！" "31"
+        exit 1
+    fi
+}
+
 # 安装zerotier-planet
 install() {
     # kernel_check
@@ -178,8 +193,10 @@ install() {
 
     install_lsof
 
-    docker rm -f ${CONTAINER_NAME} || true
+    docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
     rm -rf ${ZEROTIER_PATH}
+
+    create_directories
 
     ZT_PORT=$(read_port "请输入zerotier-planet要使用的端口号，例如9994: ")
     API_PORT=$(read_port "请输入zerotier-planet的API端口号，例如3443: ")
@@ -214,7 +231,10 @@ install() {
         exit 1
     fi
 
-    docker run -d \
+    echo "正在启动容器..."
+    
+    # 创建容器，捕获错误输出
+    RUN_OUTPUT=$(docker run -d \
         --name ${CONTAINER_NAME} \
         -p ${ZT_PORT}:${ZT_PORT} \
         -p ${ZT_PORT}:${ZT_PORT}/udp \
@@ -230,23 +250,45 @@ install() {
         -v ${ZEROTIER_PATH}/one:/var/lib/zerotier-one \
         -v ${CONFIG_PATH}:/app/config \
         --restart unless-stopped \
-        ${DOCKER_IMAGE}
+        ${DOCKER_IMAGE} 2>&1)
 
-    if [ $? -ne 0 ]; then
-        print_message "容器启动失败！请检查上述错误信息" "31"
+    RUN_EXIT_CODE=$?
+    
+    if [ $RUN_EXIT_CODE -ne 0 ]; then
+        print_message "容器启动失败！错误信息：" "31"
+        echo "$RUN_OUTPUT"
         exit 1
     fi
+
+    CONTAINER_ID=$RUN_OUTPUT
+    print_message "容器已创建，ID: $CONTAINER_ID" "32"
 
     sleep 10
 
     # 检查容器是否成功运行
     if ! docker inspect ${CONTAINER_NAME} &>/dev/null; then
-        print_message "容器创建失败，请检查Docker日志：docker logs ${CONTAINER_NAME}" "31"
+        print_message "容器创建失败！" "31"
+        echo "尝试查看容器日志："
+        docker logs ${CONTAINER_NAME} 2>&1 || true
         exit 1
     fi
 
-    KEY=$(docker exec -it ${CONTAINER_NAME} sh -c 'cat /app/config/file_server.key' | tr -d '\r')
-    MOON_NAME=$(docker exec -it ${CONTAINER_NAME} sh -c 'ls /app/dist | grep moon' | tr -d '\r')
+    # 再次检查容器是否处于运行状态
+    CONTAINER_STATUS=$(docker inspect ${CONTAINER_NAME} --format='{{.State.Status}}' 2>/dev/null)
+    
+    if [ "$CONTAINER_STATUS" != "running" ]; then
+        print_message "容器已创建但未运行！当前状态: $CONTAINER_STATUS" "31"
+        echo ""
+        echo "容器日志信息："
+        docker logs ${CONTAINER_NAME} 2>&1 | tail -50
+        exit 1
+    fi
+
+    print_message "容器成功启动" "32"
+    sleep 5
+
+    KEY=$(docker exec ${CONTAINER_NAME} sh -c 'cat /app/config/file_server.key' 2>/dev/null | tr -d '\r')
+    MOON_NAME=$(docker exec ${CONTAINER_NAME} sh -c 'ls /app/dist | grep moon' 2>/dev/null | tr -d '\r')
 
     echo "安装完成"
     echo "---------------------------"
@@ -255,9 +297,13 @@ install() {
     echo "默认密码：password"
     echo "请及时修改密码"
     echo "---------------------------"
-    echo "moon配置和planet配置在 ${DIST_PATH} 目录下"
-    echo "moons 文件下载： http://${ipv4}:${FILE_PORT}/${MOON_NAME}?key=${KEY} "
-    echo "planet文件下载： http://${ipv4}:${FILE_PORT}/planet?key=${KEY} "
+    if [ -n "$MOON_NAME" ]; then
+        echo "moon配置和planet配置在 ${DIST_PATH} 目录下"
+        echo "moons 文件下载： http://${ipv4}:${FILE_PORT}/${MOON_NAME}?key=${KEY} "
+    fi
+    if [ -n "$KEY" ]; then
+        echo "planet文件下载： http://${ipv4}:${FILE_PORT}/planet?key=${KEY} "
+    fi
     echo "---------------------------"
     echo "请放行以下端口：${ZT_PORT}/tcp,${ZT_PORT}/udp，${API_PORT}/tcp，${FILE_PORT}/tcp"
     echo "---------------------------"
@@ -300,7 +346,10 @@ install_from_config() {
         exit 1
     fi
 
-    docker run -d \
+    echo "正在启动容器..."
+    
+    # 创建容器，捕获错误输出
+    RUN_OUTPUT=$(docker run -d \
         --name ${CONTAINER_NAME} \
         -p ${ZT_PORT}:${ZT_PORT} \
         -p ${ZT_PORT}:${ZT_PORT}/udp \
@@ -316,12 +365,28 @@ install_from_config() {
         -v ${ZEROTIER_PATH}/one:/var/lib/zerotier-one \
         -v ${CONFIG_PATH}:/app/config \
         --restart unless-stopped \
-        ${DOCKER_IMAGE}
+        ${DOCKER_IMAGE} 2>&1)
 
-    if [ $? -ne 0 ]; then
-        print_message "容器启动失败！请检查上述错误信息" "31"
+    RUN_EXIT_CODE=$?
+    
+    if [ $RUN_EXIT_CODE -ne 0 ]; then
+        print_message "容器启动失败！错误信息：" "31"
+        echo "$RUN_OUTPUT"
         exit 1
     fi
+
+    CONTAINER_ID=$RUN_OUTPUT
+    print_message "容器已创建，ID: $CONTAINER_ID" "32"
+    
+    sleep 5
+
+    if ! container_running; then
+        print_message "容器已创建但未运行！" "31"
+        docker logs ${CONTAINER_NAME} 2>&1 | tail -50 || true
+        exit 1
+    fi
+
+    print_message "容器成功启动" "32"
 }
 
 upgrade() {
@@ -354,7 +419,7 @@ upgrade() {
     echo "开始升级，将会删除旧的容器，10秒后开始升级..."
     sleep 10
 
-    docker rm -f ${CONTAINER_NAME} || true
+    docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
     install_from_config
 }
 
@@ -406,7 +471,7 @@ uninstall() {
 }
 
 resetpwd() {
-    docker exec -it ${CONTAINER_NAME} sh -c 'cp /app/ztncui/src/etc/default.passwd /app/ztncui/src/etc/passwd'
+    docker exec ${CONTAINER_NAME} sh -c 'cp /app/ztncui/src/etc/default.passwd /app/ztncui/src/etc/passwd'
     if [ $? -ne 0 ]; then
         echo "重置密码失败"
         exit 1

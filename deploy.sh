@@ -1,34 +1,72 @@
 #!/bin/bash
 
 CONTAINER_NAME="myztplanet"
+
 ZEROTIER_PATH="$(pwd)/data/zerotier"
 CONFIG_PATH="${ZEROTIER_PATH}/config"
 DIST_PATH="${ZEROTIER_PATH}/dist"
 ZTNCUI_PATH="${ZEROTIER_PATH}/ztncui"
+
 DOCKER_IMAGE_THRID="xubiaolin/zerotier-planet:latest"
 DOCKER_IMAGE_SRC="xubiaolin/zerotier-planet:latest"
 DOCKER_IMAGE=$DOCKER_IMAGE_THRID
+
 print_message() {
     local message=$1
     local color_code=$2
     echo -e "\033[${color_code}m${message}\033[0m"
 }
-check_proxy(){
-# 检查daemon.json文件是否存在
-if [ -f /etc/docker/daemon.json ]; then
-    echo "daemon.json 文件存在."
-    # 检查daemon.json中是否有代理配置
-  	  if grep -q 'proxy' /etc/docker/daemon.json; then
-        DOCKER_IMAGE=$DOCKER_IMAGE_SRC
-        echo "代理配置已设置.将直接从官方源拉取镜像【$DOCKER_IMAGE_SRC】"
-    else
-        DOCKER_IMAGE=$DOCKER_IMAGE_THRID
-        echo "代理配置未设置,将从第三方服务器拉取镜像【$DOCKER_IMAGE_THRID】"
-    fi
-else
-    echo "daemon.json 文件不存在."
-fi
 
+check_proxy(){
+    if [ -f /etc/docker/daemon.json ]; then
+        echo "daemon.json 文件存在."
+        if grep -q 'proxy' /etc/docker/daemon.json; then
+            DOCKER_IMAGE=$DOCKER_IMAGE_SRC
+            echo "检测到代理，使用官方镜像：$DOCKER_IMAGE_SRC"
+        else
+            DOCKER_IMAGE=$DOCKER_IMAGE_THRID
+            echo "未检测代理，使用第三方镜像：$DOCKER_IMAGE_THRID"
+        fi
+    else
+        echo "daemon.json 文件不存在."
+    fi
+}
+
+container_exists() {
+    docker ps -a --format '{{.Names}}' | grep -w "$CONTAINER_NAME" >/dev/null 2>&1
+}
+
+container_running() {
+    docker ps --format '{{.Names}}' | grep -w "$CONTAINER_NAME" >/dev/null 2>&1
+}
+
+start_container() {
+
+    if container_exists; then
+        echo "容器已存在"
+
+        if container_running; then
+            echo "容器正在运行"
+        else
+            echo "容器未运行，正在启动..."
+            docker start "$CONTAINER_NAME"
+        fi
+
+    else
+        echo "容器不存在，开始创建..."
+
+        docker run -d \
+            --name "$CONTAINER_NAME" \
+            --restart=always \
+            -v "$CONFIG_PATH:/config" \
+            -v "$DIST_PATH:/dist" \
+            -v "$ZTNCUI_PATH:/ztncui" \
+            -p 9993:9993/udp \
+            -p 3443:3443 \
+            "$DOCKER_IMAGE"
+
+        echo "容器创建完成"
+    fi
 }
 # 检查内核版本
 kernel_check() {

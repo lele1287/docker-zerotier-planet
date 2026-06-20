@@ -7,7 +7,7 @@ CONFIG_PATH="${ZEROTIER_PATH}/config"
 DIST_PATH="${ZEROTIER_PATH}/dist"
 ZTNCUI_PATH="${ZEROTIER_PATH}/ztncui"
 
-DOCKER_IMAGE_THRID="xubiaolin/zerotier-planet:latest"
+DOCKER_IMAGE_THRID="docker.1ms.run/xubiaolin/zerotier-planet:latest"
 DOCKER_IMAGE_SRC="docker.1ms.run/xubiaolin/zerotier-planet:latest"
 DOCKER_IMAGE=$DOCKER_IMAGE_THRID
 
@@ -168,6 +168,7 @@ install() {
             upgrade
             exit 0
         fi
+        exit 0
     fi
 
     echo "开始安装，如果你已经安装了，将会删除旧的数据，10秒后开始安装..."
@@ -205,6 +206,14 @@ install() {
     echo "IPv6地址为：${ipv6}"
     echo "---------------------------"
 
+    # 拉取最新镜像
+    echo "正在拉取镜像：${DOCKER_IMAGE}"
+    docker pull ${DOCKER_IMAGE}
+    if [ $? -ne 0 ]; then
+        print_message "镜像拉取失败，请检查网络连接和镜像地址是否正确" "31"
+        exit 1
+    fi
+
     docker run -d \
         --name ${CONTAINER_NAME} \
         -p ${ZT_PORT}:${ZT_PORT} \
@@ -223,7 +232,18 @@ install() {
         --restart unless-stopped \
         ${DOCKER_IMAGE}
 
+    if [ $? -ne 0 ]; then
+        print_message "容器启动失败！请检查上述错误信息" "31"
+        exit 1
+    fi
+
     sleep 10
+
+    # 检查容器是否成功运行
+    if ! docker inspect ${CONTAINER_NAME} &>/dev/null; then
+        print_message "容器创建失败，请检查Docker日志：docker logs ${CONTAINER_NAME}" "31"
+        exit 1
+    fi
 
     KEY=$(docker exec -it ${CONTAINER_NAME} sh -c 'cat /app/config/file_server.key' | tr -d '\r')
     MOON_NAME=$(docker exec -it ${CONTAINER_NAME} sh -c 'ls /app/dist | grep moon' | tr -d '\r')
@@ -272,6 +292,14 @@ install_from_config() {
     echo "MOON_NAME:${MOON_NAME}"
     echo "---------------------------"
 
+    # 拉取最新镜像
+    echo "正在拉取镜像：${DOCKER_IMAGE}"
+    docker pull ${DOCKER_IMAGE}
+    if [ $? -ne 0 ]; then
+        print_message "镜像拉取失败，请检查网络连接和镜像地址是否正确" "31"
+        exit 1
+    fi
+
     docker run -d \
         --name ${CONTAINER_NAME} \
         -p ${ZT_PORT}:${ZT_PORT} \
@@ -289,6 +317,11 @@ install_from_config() {
         -v ${CONFIG_PATH}:/app/config \
         --restart unless-stopped \
         ${DOCKER_IMAGE}
+
+    if [ $? -ne 0 ]; then
+        print_message "容器启动失败！请检查上述错误信息" "31"
+        exit 1
+    fi
 }
 
 upgrade() {
@@ -298,6 +331,11 @@ upgrade() {
     fi
 
     docker pull ${DOCKER_IMAGE}
+    if [ $? -ne 0 ]; then
+        print_message "镜像拉取失败" "31"
+        exit 1
+    fi
+
     new_image_id=$(docker inspect ${DOCKER_IMAGE} --format='{{.Id}}')
     old_image_id=$(docker inspect ${CONTAINER_NAME} --format='{{.Image}}')
     if [ "$new_image_id" == "$old_image_id" ]; then
@@ -355,9 +393,9 @@ info() {
 uninstall() {
     echo "开始卸载..."
 
-    docker stop ${CONTAINER_NAME}
-    docker rm ${CONTAINER_NAME}
-    docker rmi ${DOCKER_IMAGE}
+    docker stop ${CONTAINER_NAME} 2>/dev/null || true
+    docker rm ${CONTAINER_NAME} 2>/dev/null || true
+    docker rmi ${DOCKER_IMAGE} 2>/dev/null || true
 
     read -p "是否删除数据?(y/n) " delete_data
     if [[ "$delete_data" =~ ^[Yy]$ ]]; then
